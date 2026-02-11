@@ -773,16 +773,19 @@ static void inline fmadd_chunk(STREAM_TYPE *source1, STREAM_TYPE *source2, STREA
 
         "prefetchw [r12]\n"
         "vmovaps ymm0, YMMWORD PTR[r14]\n"
+        "vmovaps ymm2, YMMWORD PTR[r14 + 32]\n"
         "vfmadd231ps ymm0, ymm1, YMMWORD PTR [r13 + 0]\n"
+        "vfmadd231ps ymm2, ymm1, YMMWORD PTR [r13 + 32]\n"
         "vmovaps YMMWORD PTR[r12], ymm0\n"
-        "add r12, 32\n"
-        "add r13, 32\n"
-        "add r14, 32\n"
-        "sub r11, 8\n"
+        "vmovaps YMMWORD PTR[r12 + 32], ymm2\n"
+        "add r12, 64\n"
+        "add r13, 64\n"
+        "add r14, 64\n"
+        "sub r11, 16\n"
         "jnz loop_fmadd%=\n"
         :
         : [source1] "rm" (source1), [source2] "rm" (source2), [dest] "rm" (dest), [count] "rm" (count), [vscale] "rm" (vscale)
-        : "r11", "r12", "r13", "r14", "memory", "ymm0", "ymm1"
+        : "r11", "r12", "r13", "r14", "memory", "ymm0", "ymm1", "ymm2"
     );
 #endif
 }

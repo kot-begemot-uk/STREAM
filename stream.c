@@ -46,6 +46,7 @@
 # include <float.h>
 # include <limits.h>
 # include <sys/time.h>
+# include <immintrin.h>
 
 /*-----------------------------------------------------------------------
  * INSTRUCTIONS:
@@ -91,7 +92,7 @@
  *          per array.
  */
 #ifndef STREAM_ARRAY_SIZE
-#   define STREAM_ARRAY_SIZE	10000000
+#   define STREAM_ARRAY_SIZE	200000000
 #endif
 
 /*  2) STREAM runs each kernel "NTIMES" times and reports the *best* result
@@ -176,9 +177,9 @@
 #define STREAM_TYPE double
 #endif
 
-static STREAM_TYPE	a[STREAM_ARRAY_SIZE+OFFSET],
-			b[STREAM_ARRAY_SIZE+OFFSET],
-			c[STREAM_ARRAY_SIZE+OFFSET];
+static STREAM_TYPE	*a,
+			*b,
+			*c;
 
 static double	avgtime[4] = {0}, maxtime[4] = {0},
 		mintime[4] = {FLT_MAX,FLT_MAX,FLT_MAX,FLT_MAX};
@@ -213,6 +214,11 @@ main()
     ssize_t		j;
     STREAM_TYPE		scalar;
     double		t, times[4][NTIMES];
+
+    a = calloc(STREAM_ARRAY_SIZE, sizeof(double));
+    b = calloc(STREAM_ARRAY_SIZE, sizeof(double));
+    c = calloc(STREAM_ARRAY_SIZE, sizeof(double));
+
 
     /* --- SETUP --- determine precision and check timing --- */
 
@@ -549,37 +555,187 @@ void checkSTREAMresults ()
 }
 
 #ifdef TUNED
+
+#define VECSIZE 4
+#define WORK_QUANTUM 10000
+
 /* stubs for "tuned" versions of the kernels */
+static void inline copy_chunk(double *source, double *dest, ssize_t count)
+{
+    asm volatile(
+            "mov r12, %[count]\n"
+            "mov r14, %[source]\n"
+            "mov r13, %[dest]\n"
+            "loop_copy%=:\n"
+            "prefetchw [r13]\n"
+            "vmovupd ymm0, YMMWORD PTR [r14]\n"
+            "vmovupd ymm1, YMMWORD PTR [r14 + 32]\n"
+            "vmovupd YMMWORD PTR [r13], ymm0\n"
+            "vmovupd YMMWORD PTR [r13 + 32], ymm1\n"
+            "add r14, 64\n"
+            "add r13, 64\n"
+            "sub r12, 8\n"
+            "jnz loop_copy%=\n"
+            :
+            : [source] "rm" (source), [dest] "rm" (dest), [count] "rm" (count)
+            : "r12", "r14", "r13", "memory", "ymm0", "ymm1"
+    );
+    // _mm256_storeu_pd(c + j, _mm256_loadu_pd(a + j));
+}
+
 void tuned_STREAM_Copy()
 {
 	ssize_t j;
+
 #pragma omp parallel for
-        for (j=0; j<STREAM_ARRAY_SIZE; j++)
-            c[j] = a[j];
+	for (j=0; j<STREAM_ARRAY_SIZE; j+= WORK_QUANTUM)
+        if (j + WORK_QUANTUM > STREAM_ARRAY_SIZE) {
+            copy_chunk(a + j, c + j, STREAM_ARRAY_SIZE - j);
+        } else {
+            copy_chunk(a + j, c + j, WORK_QUANTUM);
+        }
+          //_mm256_storeu_pd(b + j, _mm256_mul_pd(vscalar, _mm256_loadu_pd(c + j)));
 }
+
+static void inline scale_chunk(double *source, double *dest, double scale, ssize_t count)
+{
+    //__m256d vscale = _mm256_broadcast_sd(&scale);
+
+    double vscale[4] = {scale, scale, scale, scale};
+
+    asm volatile (
+        "mov r12, %[count]\n"
+        "mov r14, %[vscale]\n"
+        "vmovupd ymm1, YMMWORD PTR [r14 + 0]\n"
+        "mov r13, %[dest]\n"
+        "mov r14, %[source]\n"
+
+        "loop_scale%=:\n"
+
+        "prefetchw [r13]\n"
+        "vmulpd ymm0, ymm1, YMMWORD PTR [r14 + 0]\n"
+        "vmovupd YMMWORD PTR[r13], ymm0\n"
+        "vmulpd ymm0, ymm1, YMMWORD PTR [r14 + 32]\n"
+        "vmovupd YMMWORD PTR[r13 + 32], ymm0\n"
+        "add r13, 64\n"
+        "add r14, 64\n"
+        "sub r12, 8\n"
+        "jnz loop_scale%=\n"
+        :
+        : [source] "rm" (source), [dest] "rm" (dest), [count] "rm" (count), [vscale] "rm" (vscale)
+        : "r12", "r13", "r14", "memory", "ymm0", "ymm1"
+    );
+}
+
 
 void tuned_STREAM_Scale(STREAM_TYPE scalar)
 {
 	ssize_t j;
+
 #pragma omp parallel for
-	for (j=0; j<STREAM_ARRAY_SIZE; j++)
-	    b[j] = scalar*c[j];
+	for (j=0; j<STREAM_ARRAY_SIZE; j+= WORK_QUANTUM)
+        if (j + WORK_QUANTUM > STREAM_ARRAY_SIZE) {
+            scale_chunk(c + j, b + j, scalar, STREAM_ARRAY_SIZE - j);
+        } else {
+            scale_chunk(c + j, b + j, scalar, WORK_QUANTUM);
+        }
+          //_mm256_storeu_pd(b + j, _mm256_mul_pd(vscalar, _mm256_loadu_pd(c + j)));
+}
+
+static void inline add_chunk(double *source, double *dest, ssize_t count)
+{
+    ssize_t j;
+
+    for (j=0; j<count; j+= VECSIZE){
+        _mm256_storeu_pd(dest + j, _mm256_add_pd(_mm256_loadu_pd(dest + j),  _mm256_loadu_pd(source + j)));
+    }
+/*
+    asm volatile (
+        "mov r12, %[count]\n"
+        "mov r13, %[dest]\n"
+        "mov r14, %[source]\n"
+
+        "loop_add%=:\n"
+
+        // dst
+        "vmovupd ymm1, YMMWORD PTR [r13]\n"
+        // add src
+        "vaddpd ymm0, ymm1, YMMWORD PTR [r14]\n"
+        // store in dst
+        "vmovupd YMMWORD PTR[r13], ymm0\n"
+        "add r13, 32\n"
+        "add r14, 32\n"
+        "sub r12, 4\n"
+        "jnz loop_add%=\n"
+        :
+        : [source] "rm" (source), [dest] "rm" (dest), [count] "rm" (count)
+        : "r12", "r13", "r14", "memory", "ymm0", "ymm1" 
+    );
+*/
 }
 
 void tuned_STREAM_Add()
 {
 	ssize_t j;
+
 #pragma omp parallel for
-	for (j=0; j<STREAM_ARRAY_SIZE; j++)
-	    c[j] = a[j]+b[j];
+	for (j=0; j<STREAM_ARRAY_SIZE; j+= WORK_QUANTUM)
+        if (j + WORK_QUANTUM > STREAM_ARRAY_SIZE) {
+            add_chunk(b + j, c + j, STREAM_ARRAY_SIZE - j);
+        } else {
+            add_chunk(b + j, c + j, WORK_QUANTUM);
+        }
+
+}
+
+static void inline fmadd_chunk(double *source1, double *source2, double *dest, double scale, ssize_t count)
+{
+    //__m256d vscale = _mm256_broadcast_sd(&scale);
+
+    double vscale[4] = {scale, scale, scale, scale};
+
+    asm volatile (
+        "mov r11, %[count]\n"
+        "mov r14, %[vscale]\n"
+        "vmovupd ymm1, YMMWORD PTR [r14 + 0]\n"
+        "mov r12, %[dest]\n"    //a
+        "mov r14, %[source1]\n" //b 
+        "mov r13, %[source2]\n" //c
+
+        "loop_fmadd%=:\n"
+
+        "prefetchw [r12]\n"
+        "vmovupd ymm0, YMMWORD PTR[r14]\n" 
+        "vfmadd231pd ymm0, ymm1, YMMWORD PTR [r13 + 0]\n" 
+        "vmovupd YMMWORD PTR[r12], ymm0\n"
+        "add r12, 32\n"
+        "add r13, 32\n"
+        "add r14, 32\n"
+        "sub r11, 4\n"
+        "jnz loop_fmadd%=\n"
+        :
+        : [source1] "rm" (source1), [source2] "rm" (source2), [dest] "rm" (dest), [count] "rm" (count), [vscale] "rm" (vscale)
+        : "r11", "r12", "r13", "r14", "memory", "ymm0", "ymm1"
+    );
 }
 
 void tuned_STREAM_Triad(STREAM_TYPE scalar)
 {
 	ssize_t j;
+
 #pragma omp parallel for
-	for (j=0; j<STREAM_ARRAY_SIZE; j++)
-	    a[j] = b[j]+scalar*c[j];
+	for (j=0; j<STREAM_ARRAY_SIZE; j+= WORK_QUANTUM)
+        if (j + WORK_QUANTUM > STREAM_ARRAY_SIZE) {
+            fmadd_chunk(b + j, c + j, a + j, scalar, STREAM_ARRAY_SIZE - j);
+        } else {
+            fmadd_chunk(b + j, c + j, a + j, scalar, WORK_QUANTUM);
+        }
+
+
+
+//	for (j=0; j<STREAM_ARRAY_SIZE; j+= VECSIZE)
+//        _mm256_storeu_pd(a + j, _mm256_fmadd_pd(vscalar, _mm256_loadu_pd(c + j), _mm256_loadu_pd(b + j)));
 }
 /* end of stubs for the "tuned" versions of the kernels */
 #endif
+

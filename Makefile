@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -O2 -fopenmp
+CFLAGS = -g -O3 -fopenmp -fopenmp-simd -march=native -masm=intel -DTUNED 
 
 FC = gfortran
 FFLAGS = -O2 -fopenmp

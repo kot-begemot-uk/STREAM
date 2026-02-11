@@ -46,6 +46,7 @@
 # include <float.h>
 # include <limits.h>
 # include <sys/time.h>
+# include <sys/mman.h>
 # include <immintrin.h>
 
 /*-----------------------------------------------------------------------
@@ -223,9 +224,9 @@ main()
     STREAM_TYPE		scalar;
     double		t, times[4][NTIMES];
 
-    a = calloc(STREAM_ARRAY_SIZE, sizeof(double));
-    b = calloc(STREAM_ARRAY_SIZE, sizeof(double));
-    c = calloc(STREAM_ARRAY_SIZE, sizeof(double));
+    a = aligned_alloc(64, STREAM_ARRAY_SIZE * sizeof(double));
+    b = aligned_alloc(64, STREAM_ARRAY_SIZE * sizeof(double));
+    c = aligned_alloc(64, STREAM_ARRAY_SIZE * sizeof(double));
 
 
     /* --- SETUP --- determine precision and check timing --- */
@@ -583,10 +584,10 @@ static void inline copy_chunk(STREAM_TYPE *source, STREAM_TYPE *dest, ssize_t co
             "mov r13, %[dest]\n"
             "loop_copy%=:\n"
             "prefetchw [r13]\n"
-            "vmovupd ymm0, YMMWORD PTR [r14]\n"
-            "vmovupd ymm1, YMMWORD PTR [r14 + 32]\n"
-            "vmovupd YMMWORD PTR [r13], ymm0\n"
-            "vmovupd YMMWORD PTR [r13 + 32], ymm1\n"
+            "vmovapd ymm0, YMMWORD PTR [r14]\n"
+            "vmovapd ymm1, YMMWORD PTR [r14 + 32]\n"
+            "vmovapd YMMWORD PTR [r13], ymm0\n"
+            "vmovapd YMMWORD PTR [r13 + 32], ymm1\n"
             "add r14, 64\n"
             "add r13, 64\n"
             "sub r12, 8\n"
@@ -602,10 +603,10 @@ static void inline copy_chunk(STREAM_TYPE *source, STREAM_TYPE *dest, ssize_t co
             "mov r13, %[dest]\n"
             "loop_copy%=:\n"
             "prefetchw [r13]\n"
-            "vmovups ymm0, YMMWORD PTR [r14]\n"
-            "vmovups ymm1, YMMWORD PTR [r14 + 32]\n"
-            "vmovups YMMWORD PTR [r13], ymm0\n"
-            "vmovups YMMWORD PTR [r13 + 32], ymm1\n"
+            "vmovaps ymm0, YMMWORD PTR [r14]\n"
+            "vmovaps ymm1, YMMWORD PTR [r14 + 32]\n"
+            "vmovaps YMMWORD PTR [r13], ymm0\n"
+            "vmovaps YMMWORD PTR [r13 + 32], ymm1\n"
             "add r14, 64\n"
             "add r13, 64\n"
             "sub r12, 16\n"
@@ -648,9 +649,9 @@ static void inline scale_chunk(STREAM_TYPE *source, STREAM_TYPE *dest, STREAM_TY
 
         "prefetchw [r13]\n"
         "vmulpd ymm0, ymm1, YMMWORD PTR [r14 + 0]\n"
-        "vmovupd YMMWORD PTR[r13], ymm0\n"
+        "vmovapd YMMWORD PTR[r13], ymm0\n"
         "vmulpd ymm0, ymm1, YMMWORD PTR [r14 + 32]\n"
-        "vmovupd YMMWORD PTR[r13 + 32], ymm0\n"
+        "vmovapd YMMWORD PTR[r13 + 32], ymm0\n"
         "add r13, 64\n"
         "add r14, 64\n"
         "sub r12, 8\n"
@@ -673,9 +674,9 @@ static void inline scale_chunk(STREAM_TYPE *source, STREAM_TYPE *dest, STREAM_TY
 
         "prefetchw [r13]\n"
         "vmulps ymm0, ymm1, YMMWORD PTR [r14 + 0]\n"
-        "vmovups YMMWORD PTR[r13], ymm0\n"
+        "vmovaps YMMWORD PTR[r13], ymm0\n"
         "vmulps ymm0, ymm1, YMMWORD PTR [r14 + 32]\n"
-        "vmovups YMMWORD PTR[r13 + 32], ymm0\n"
+        "vmovaps YMMWORD PTR[r13 + 32], ymm0\n"
         "add r13, 64\n"
         "add r14, 64\n"
         "sub r12, 16\n"
@@ -746,9 +747,9 @@ static void inline fmadd_chunk(STREAM_TYPE *source1, STREAM_TYPE *source2, STREA
         "loop_fmadd%=:\n"
 
         "prefetchw [r12]\n"
-        "vmovupd ymm0, YMMWORD PTR[r14]\n"
+        "vmovapd ymm0, YMMWORD PTR[r14]\n"
         "vfmadd231pd ymm0, ymm1, YMMWORD PTR [r13 + 0]\n"
-        "vmovupd YMMWORD PTR[r12], ymm0\n"
+        "vmovapd YMMWORD PTR[r12], ymm0\n"
         "add r12, 32\n"
         "add r13, 32\n"
         "add r14, 32\n"
@@ -771,9 +772,9 @@ static void inline fmadd_chunk(STREAM_TYPE *source1, STREAM_TYPE *source2, STREA
         "loop_fmadd%=:\n"
 
         "prefetchw [r12]\n"
-        "vmovups ymm0, YMMWORD PTR[r14]\n"
+        "vmovaps ymm0, YMMWORD PTR[r14]\n"
         "vfmadd231ps ymm0, ymm1, YMMWORD PTR [r13 + 0]\n"
-        "vmovups YMMWORD PTR[r12], ymm0\n"
+        "vmovaps YMMWORD PTR[r12], ymm0\n"
         "add r12, 32\n"
         "add r13, 32\n"
         "add r14, 32\n"
